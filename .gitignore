@@ -1,0 +1,25 @@
+﻿# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+py311_env/
+
+# Logs & runtime data (stay local only)
+memory/
+ledger/
+logs/
+status/
+sandbox/
+
+# Local seeds and keys with real paths/identity
+*import_seed.json
+cipher_local.json
+vexis_import_seed.json
+Ciphers A key pi.txt
+
+# OS noise
+Thumbs.db
+.DS_Store

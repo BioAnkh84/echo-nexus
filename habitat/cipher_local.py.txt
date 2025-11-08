@@ -1,0 +1,183 @@
+from __future__ import annotations
+from pathlib import Path
+import json
+import datetime
+import os
+import sys
+
+# --- Paths ---------------------------------------------------------
+
+ROOT = Path(__file__).resolve().parents[1]
+MEM_STREAM = ROOT / "memory" / "streams" / "root_memory.jsonl"
+PROFILE_PATH = ROOT / "memory" / "profiles" / "cipher_profile.json"
+SNAPSHOT_DIR = ROOT / "memory" / "snapshots"
+
+
+# --- Helpers -------------------------------------------------------
+
+def now_utc() -> str:
+    return datetime.datetime.utcnow().isoformat() + "Z"
+
+
+def host_user() -> tuple[str, str]:
+    host = os.getenv("COMPUTERNAME")
+    if not host:
+        try:
+            host = os.uname().nodename  # type: ignore[attr-defined]
+        except Exception:
+            host = "unknown-host"
+
+    user = os.getenv("USERNAME") or os.getenv("USER") or "unknown-user"
+    return host, user
+
+
+def load_profile() -> dict | None:
+    if PROFILE_PATH.exists():
+        try:
+            return json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def load_recent_memories(limit: int = 10) -> list:
+    if not MEM_STREAM.exists():
+        return []
+
+    lines: list[str] = []
+    with MEM_STREAM.open("r", encoding="utf-8") as f:
+        for line in f:
+            s = line.strip()
+            if s:
+                lines.append(s)
+
+    tail = lines[-limit:]
+    out: list[dict] = []
+    for line in tail:
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            out.append({"raw": line})
+    return out
+
+
+def load_latest_snapshot() -> dict | None:
+    if not SNAPSHOT_DIR.exists():
+        return None
+
+    snaps = sorted(SNAPSHOT_DIR.glob("snapshot_*.json"))
+    if not snaps:
+        return None
+
+    try:
+        return json.loads(snaps[-1].read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def append_memory(note: str, tag: str | None = None, source: str = "cipher_local") -> dict:
+    host, user = host_user()
+    entry: dict = {
+        "ts_utc": now_utc(),
+        "host": host,
+        "user": user,
+        "source": source,
+        "note": note,
+    }
+    if tag:
+        entry["tag"] = tag
+
+    MEM_STREAM.parent.mkdir(parents=True, exist_ok=True)
+    with MEM_STREAM.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    return entry
+
+
+def build_state() -> dict:
+    host, user = host_user()
+    state: dict = {
+        "ts_utc": now_utc(),
+        "host": host,
+        "user": user,
+        "echo_root": str(ROOT),
+        "profile": load_profile(),
+        "recent_memories": load_recent_memories(limit=10),
+        "snapshot": load_latest_snapshot(),
+    }
+    return state
+
+
+def reflect(message: str) -> dict:
+    """
+    Very simple local "reflection" stub.
+    This is where upstream LLM logic would eventually plug in.
+    """
+    state = build_state()
+    recent_notes: list[str] = []
+
+    for m in state.get("recent_memories", []):
+        if isinstance(m, dict):
+            note = m.get("note") or m.get("summary")
+            if note:
+                recent_notes.append(note)
+
+    payload: dict = {
+        "ts_utc": now_utc(),
+        "echo_root": state.get("echo_root"),
+        "input": message,
+        "recent_memory_notes": recent_notes,
+        "meta": {
+            "description": "Local Cipher reflection stub. Replace/augment with LLM logic.",
+        },
+    }
+
+    # Log that a reflection happened
+    append_memory(f"Reflect: {message}", tag="Cipher")
+    return payload
+
+
+# --- CLI entrypoint ------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # No args -> dump full state
+    if not argv:
+        print(json.dumps(build_state(), ensure_ascii=False, indent=2))
+        return 0
+
+    cmd = argv[0].lower()
+
+    if cmd == "ping":
+        host, user = host_user()
+        payload = {
+            "ts_utc": now_utc(),
+            "status": "ok",
+            "host": host,
+            "user": user,
+            "echo_root": str(ROOT),
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        return 0
+
+    if cmd == "state":
+        print(json.dumps(build_state(), ensure_ascii=False, indent=2))
+        return 0
+
+    if cmd == "reflect":
+        if len(argv) < 2:
+            print(json.dumps({"error": "no message"}, ensure_ascii=False))
+            return 1
+        message = " ".join(argv[1:])
+        out = reflect(message)
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+
+    print(json.dumps({"error": f"unknown command: {cmd}"}, ensure_ascii=False))
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
