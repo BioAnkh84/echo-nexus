@@ -1,0 +1,68 @@
+﻿{
+    "snapshot_id":  "51e8cf13-39a8-4cea-b566-a2d10ba7382f",
+    "created_utc":  "2025-12-04T03:01:19.6850789Z",
+    "label":  "cipher_guardian_v0_1b",
+    "root":  "E:\\Echo_Nexus_Data",
+    "release_name":  "cipher_guardian_v0_1b_20251203_220119",
+    "copied":  [
+                   "habitat\\cipher_local\\cipher_kernel.py",
+                   "habitat\\cipher_local\\cipher_local_chat.py",
+                   "habitat\\cipher_local\\cipher_sensors_cli.py",
+                   "habitat\\cipher_local\\launch_cipher.ps1",
+                   "habitat\\cipher_local\\config\\cipher_boot_profile.json",
+                   "launch\\echo_nexus_start.ps1",
+                   "nexus_heartbeat\\nexus_heartbeat.ps1",
+                   "status\\nexus_operator_status.json",
+                   "status\\nexus_status_latest.json"
+               ],
+    "missing":  [
+
+                ],
+    "files":  [
+                  {
+                      "relative_path":  "habitat\\cipher_local\\cipher_kernel.py",
+                      "sha256":  "4DE8B48DE2036F4525FB8912636E73C11F67D74478FB71496768F028D1C54D8A",
+                      "bytes":  7618
+                  },
+                  {
+                      "relative_path":  "habitat\\cipher_local\\cipher_local_chat.py",
+                      "sha256":  "64E023B1C8C11DC7C7F74F2837C56DCE0B87B2E3B7C088297D09962528E284D0",
+                      "bytes":  5999
+                  },
+                  {
+                      "relative_path":  "habitat\\cipher_local\\cipher_sensors_cli.py",
+                      "sha256":  "5374522693035B3703BCD9942AB83ACA15D4B23FB404E083543B3F269A2D6A3A",
+                      "bytes":  2408
+                  },
+                  {
+                      "relative_path":  "habitat\\cipher_local\\config\\cipher_boot_profile.json",
+                      "sha256":  "7AFE52E750416657EA6394E2B389A1EF2094BC4FB1D93C310A15E6D348439884",
+                      "bytes":  2052
+                  },
+                  {
+                      "relative_path":  "habitat\\cipher_local\\launch_cipher.ps1",
+                      "sha256":  "74F74BC9A8A664C0A0E428AD17419284A3392A5B2FE41017E8AF91F3371F1E0C",
+                      "bytes":  291
+                  },
+                  {
+                      "relative_path":  "launch\\echo_nexus_start.ps1",
+                      "sha256":  "F8FAF3D7367CA06B00C94E1EC4D2BDD188A85E0B69EFE0038AA0C693E36759D5",
+                      "bytes":  1621
+                  },
+                  {
+                      "relative_path":  "nexus_heartbeat\\nexus_heartbeat.ps1",
+                      "sha256":  "BCBA2ACB00FC447976BCF9564176EE7430A04809293007D74168351F1A6027C8",
+                      "bytes":  1271
+                  },
+                  {
+                      "relative_path":  "status\\nexus_operator_status.json",
+                      "sha256":  "0224A3618C1688493EC9B29A7B6B9A25385B445F7506785F0584968026CF9645",
+                      "bytes":  2501
+                  },
+                  {
+                      "relative_path":  "status\\nexus_status_latest.json",
+                      "sha256":  "7C063F4C6F5DA719A3CE83FA7EA029B7324240EDE8C0032EBCE73DEDE1184944",
+                      "bytes":  1128
+                  }
+              ]
+}
