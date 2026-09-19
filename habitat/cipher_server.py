@@ -1,20 +1,61 @@
 ﻿from flask import Flask, request, jsonify
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from datetime import datetime, timezone
-from openai import OpenAI
 import json
+import os
 
 app = Flask(__name__)
 
 # --- Model / brain config ---
-USE_OPENAI = True  # flip to False if you want to force stub replies
-OPENAI_MODEL = "gpt-4.1-mini"
-client = OpenAI()
+def enabled(name):
+    # Only the literal value 1 grants permission; typos fail closed.
+    return os.environ.get(name, "0") == "1"
 
-# --- Echo Nexus paths (from your seed) ---
-ECHO_ROOT = Path(r"C:\Users\Richard\Documents\Echo_Nexus")
-MEMORY_STREAM = ECHO_ROOT / "memory" / "streams" / "root_memory.jsonl"
-VEXIS_MEMORY_STREAM = ECHO_ROOT / "memory" / "streams" / "vexis_memory.jsonl"
+
+def data_root(value):
+    if not value:
+        return None
+    path = Path(value)
+    if PureWindowsPath(value).drive or not path.is_absolute():
+        raise ValueError("ECHO_NEXUS_ROOT must be an absolute POSIX path")
+    return path
+
+
+USE_OPENAI = enabled("ECHO_NEXUS_ENABLE_OPENAI")
+SEND_MEMORY = enabled("ECHO_NEXUS_SEND_MEMORY_TO_OPENAI")
+DATA_ROUTES = enabled("ECHO_NEXUS_ENABLE_DATA_ROUTES")
+OPENAI_MODEL = "gpt-4.1-mini"
+client = None
+ECHO_ROOT = data_root(os.environ.get("ECHO_NEXUS_ROOT"))
+if DATA_ROUTES and ECHO_ROOT is None:
+    raise ValueError("Protected routes require explicit ECHO_NEXUS_ROOT")
+MEMORY_STREAM = ECHO_ROOT / "memory" / "streams" / "root_memory.jsonl" if ECHO_ROOT else None
+VEXIS_MEMORY_STREAM = ECHO_ROOT / "memory" / "streams" / "vexis_memory.jsonl" if ECHO_ROOT else None
+app.config["DEBUG"] = False
+
+
+def get_client():
+    global client
+    if not USE_OPENAI:
+        raise RuntimeError("External backend disabled")
+    if client is None:
+        from openai import OpenAI
+        client = OpenAI()
+    return client
+
+
+@app.before_request
+def protect_data_routes():
+    # Allowlist public endpoints so new routes fail closed by default.
+    if not DATA_ROUTES and request.endpoint not in {
+        "health", "echo_status", "cipher_client_page"
+    }:
+        return jsonify({"error": "Protected routes disabled"}), 403
+
+
+@app.route("/healthz", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
 
 # --- Simple in-memory state for this process ---
 CIPHER_STATE = {
@@ -29,6 +70,8 @@ CIPHER_STATE = {
 # --- Helpers ---
 
 def append_jsonl(path, data):
+    if not DATA_ROUTES:
+        raise RuntimeError("Protected writes disabled")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -41,6 +84,8 @@ def read_memory_tail(path: Path, limit: int = 20):
     Return the last `limit` JSONL entries as Python objects.
     If file doesn't exist yet, return an empty list.
     """
+    if not DATA_ROUTES:
+        raise RuntimeError("Protected reads disabled")
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8") as f:
@@ -116,21 +161,22 @@ def generate_cipher_reply(message: str, user: str) -> str:
     )
 
     # Build recent context from the JSONL memory stream
-    history = build_chat_history(MEMORY_STREAM, "cipher", user, max_turns=6)
+    history = (build_chat_history(MEMORY_STREAM, "cipher", user, max_turns=6)
+               if SEND_MEMORY and DATA_ROUTES else [])
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     messages.append({"role": "user", "content": message})
 
     try:
-        resp = client.chat.completions.create(
+        resp = get_client().chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
         )
         content = resp.choices[0].message.content
         return content.strip() if content else f"(Cipher) I received: {message}"
-    except Exception as e:
-        return f"(fallback Cipher stub) Hey {user}, I heard: {message} [model error: {e}]"
+    except Exception:
+        return "(Cipher) External backend unavailable."
 
 
 def generate_vexis_reply(message: str, user: str) -> str:
@@ -151,21 +197,22 @@ def generate_vexis_reply(message: str, user: str) -> str:
         "You see a short transcript of your recent conversation with Richard from the local memory stream."
     )
 
-    history = build_chat_history(VEXIS_MEMORY_STREAM, "vexis", user, max_turns=6)
+    history = (build_chat_history(VEXIS_MEMORY_STREAM, "vexis", user, max_turns=6)
+               if SEND_MEMORY and DATA_ROUTES else [])
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     messages.append({"role": "user", "content": message})
 
     try:
-        resp = client.chat.completions.create(
+        resp = get_client().chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
         )
         content = resp.choices[0].message.content
         return content.strip() if content else f"(Vexis) I received: {message}"
-    except Exception as e:
-        return f"(fallback Vexis stub) I heard: {message} [model error: {e}]"
+    except Exception:
+        return "(Vexis) External backend unavailable."
 
 
 
@@ -362,7 +409,7 @@ def cipher_chat():
 def vexis_import():
     """
     Import the Vexis seed and track it in CIPHER_STATE.
-    Body: { "path": "C:\\Users\\Richard\\Documents\\Echo_Nexus\\habitat\\vexis_import_seed.json" }
+    Body: { "path": "/explicit/synthetic-fixtures/vexis_seed.json" }
     """
     data = request.get_json(force=True) or {}
     path = data.get("path")
@@ -538,6 +585,8 @@ def echo_handshake():
 
 @app.route("/")
 def cipher_client_page():
+    if not DATA_ROUTES:
+        return "Echo Nexus: protected routes disabled. Health: /healthz", 200
     # Echo Nexus console – galaxy theme, softer text for low light
     html = """
     <!doctype html>
@@ -764,7 +813,7 @@ def cipher_client_page():
         };
 
         document.getElementById('refresh').onclick = refreshTail;
-        window.onload = refreshTail;
+        // Memory reads require an explicit Refresh Log action.
         document.getElementById('logSource').onchange = refreshTail;
       </script>
     </body>
@@ -790,4 +839,5 @@ def echo_status():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="127.0.0.1", port=5000, debug=False,
+            use_reloader=False, load_dotenv=False)
