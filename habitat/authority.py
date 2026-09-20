@@ -38,6 +38,19 @@ class Permission:
     fingerprint: str
 
 
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise AuthorityDenied()
+        result[key] = value
+    return result
+
+
+def _invalid_constant(_value):
+    raise AuthorityDenied()
+
+
 def _registry(path):
     if path is None or not Path(path).is_absolute():
         raise AuthorityDenied()
@@ -51,7 +64,8 @@ def _registry(path):
         raw = stream.read(MAX_REGISTRY_BYTES + 1)
     if len(raw) > MAX_REGISTRY_BYTES:
         raise AuthorityDenied()
-    data = json.loads(raw)
+    data = json.loads(raw, object_pairs_hook=_unique_object,
+                      parse_constant=_invalid_constant)
     if (not isinstance(data, dict) or type(data.get("schema_version")) is not int
             or data.get("schema_version") != 1
             or data.get("charter_sha256") != CHARTER_SHA256

@@ -106,6 +106,21 @@ def protect_data_routes():
 def health():
     return jsonify({"status": "ok"}), 200
 
+
+@app.after_request
+def protect_response(response):
+    # A read/operation and the HTTP disclosure are separate boundaries.
+    # This cannot undo effects already completed under the earlier check.
+    if (request.endpoint in ROUTE_ACTIONS and response.status_code < 400
+            and getattr(g, "permission", None) is not None):
+        try:
+            require_authority()
+        except AuthorityDenied as error:
+            body, status = authority_denied(error)
+            response = app.make_response((body, status))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
 # --- Simple in-memory state for this process ---
 CIPHER_STATE = {
     "seed": None,
@@ -225,12 +240,16 @@ def generate_cipher_reply(message: str, user: str) -> str:
 
     require_authority("external.openai")
     try:
-        resp = get_client().chat.completions.create(
+        backend = get_client()
+        require_authority("external.openai")
+        resp = backend.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
         )
         content = resp.choices[0].message.content
         return content.strip() if content else f"(Cipher) I received: {message}"
+    except AuthorityDenied:
+        raise
     except Exception:
         return "(Cipher) External backend unavailable."
 
@@ -262,12 +281,16 @@ def generate_vexis_reply(message: str, user: str) -> str:
 
     require_authority("external.openai")
     try:
-        resp = get_client().chat.completions.create(
+        backend = get_client()
+        require_authority("external.openai")
+        resp = backend.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
         )
         content = resp.choices[0].message.content
         return content.strip() if content else f"(Vexis) I received: {message}"
+    except AuthorityDenied:
+        raise
     except Exception:
         return "(Vexis) External backend unavailable."
 

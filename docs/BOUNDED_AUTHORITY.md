@@ -68,7 +68,8 @@ scope and timestamps from a separately authorized grant, not merely copy it.
 within `[issued_at, expires_at)`. `revoked` must be explicitly false. The audience
 must be `echo-nexus`. The data root must exactly equal the configured absolute
 path. Unknown actions, duplicate grant IDs, ambiguous matching tokens, missing
-registry files and malformed records fail closed. There is no wildcard action.
+registry files and malformed applicable grants fail closed. Duplicate JSON keys
+and nonstandard numeric constants are rejected throughout the registry. There is no wildcard action.
 
 Every protected request supplies `Authorization: Bearer <token>` and
 `X-Echo-Purpose: <exact granted purpose>`. Requests without applicable authority
@@ -130,7 +131,9 @@ approve seed contents and placement; filename permission is not a content hash.
 ## Revocation and recovery
 
 The registry is reread at admission and immediately before helper-mediated
-memory reads/writes, outbound calls and seed-state replacement. Removing a grant,
+memory reads/writes, outbound calls (after client setup), seed-state replacement
+and successful protected HTTP responses. Responses use `Cache-Control: no-store`
+to prevent ordinary browser/proxy caching of protected output. Removing a grant,
 revoking it, expiring it, or changing its content prevents subsequent checks
 from succeeding. Update registries by atomic replacement with private permissions
 to avoid transient partial JSON. A changed grant cannot silently replace the

@@ -105,6 +105,17 @@ class GrantTests(GrantFixture, unittest.TestCase):
         with self.assertRaises(AuthorityDenied):
             self.check()
 
+    def test_ambiguous_registry_json_is_rejected(self):
+        payload = json.dumps({'schema_version': 1, 'charter_sha256': CHARTER_SHA256,
+                              'grants': [self.grant]})
+        for invalid in (payload.replace('"revoked": false', '"revoked": true, "revoked": false'),
+                        payload.replace('"schema_version": 1', '"schema_version": 0, "schema_version": 1'),
+                        payload.replace('"revoked": false', '"unknown": NaN, "revoked": false')):
+            with self.subTest(payload=invalid):
+                self.registry.write_text(invalid)
+                with self.assertRaises(AuthorityDenied):
+                    self.check()
+
     def test_duplicate_token_or_grant_id_rejected(self):
         for second in (self.grant, dict(self.grant, grant_id='second')):
             self.registry.write_text(json.dumps({'schema_version': 1,
@@ -226,6 +237,34 @@ class HttpAuthorityTests(GrantFixture, unittest.TestCase):
             result = self.http.post('/cipher/chat', headers=self.headers, json={'message': 'test'})
             self.assertEqual(result.status_code, 403)
         self.assertFalse(self.root.exists())
+
+    def test_revocation_during_client_setup_prevents_provider_request(self):
+        self.server.USE_OPENAI = True
+        self.grant['actions'] = ['cipher.chat', 'external.openai']
+        self.save()
+        backend = Mock()
+        def revoke():
+            self.grant['revoked'] = True
+            self.save()
+            return backend
+        with patch.object(self.server, 'get_client', side_effect=revoke):
+            response = self.http.post('/cipher/chat', headers=self.headers, json={'message': 'test'})
+        self.assertEqual(response.status_code, 403)
+        backend.chat.completions.create.assert_not_called()
+        self.assertFalse(self.root.exists())
+
+    def test_revocation_after_read_prevents_response_disclosure(self):
+        self.grant['actions'] = ['cipher.memory.read']
+        self.save()
+        def revoke(*args):
+            self.grant['revoked'] = True
+            self.save()
+            return [{'summary': 'synthetic-private-content'}]
+        with patch.object(self.server, 'read_memory_tail', side_effect=revoke):
+            response = self.http.get('/cipher/memory/tail', headers=self.headers)
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn('synthetic-private-content', response.get_data(as_text=True))
+        self.assertIn('no-store', response.headers['Cache-Control'])
 
     def test_authorized_external_response_uses_mock_and_grant_subject(self):
         self.server.USE_OPENAI = True
