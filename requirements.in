@@ -1,0 +1,3 @@
+# Direct runtime dependencies; openai is imported only after backend opt-in.
+Flask
+openai
