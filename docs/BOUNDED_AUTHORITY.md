@@ -94,6 +94,7 @@ Refresh Log is a separate operation requiring its own action permission.
 | `cipher.state.read` | Read imported Cipher state metadata. |
 | `cipher.import` / `vexis.import` | Read and return an allowlisted JSON seed and replace the corresponding in-process seed state. |
 | `echo.handshake` | Exchange advisory text with Vexis and append the exchange to Vexis memory. |
+| `receipt.append` | Additional permission to append execution receipts; required for both chat routes and handshake. |
 | `external.openai` | Additional permission for chat/handshake text and persona context to be sent to OpenAI; also requires its capability switch. |
 | `memory.export` | Additional permission to include recent stored chat context; also requires both external permission and the memory capability switch. |
 
@@ -161,14 +162,14 @@ and confined imports. INTEGRATED: the module is wired into these HTTP handlers
 only. OBSERVED/VERIFIED for the live Habitat or an end-to-end constitutional
 system are not established by this test suite.
 
-Memory entries now record grant ID, authenticated subject and purpose separately
-from caller event labels. They are ordinary JSONL events, not tamper-evident
-approval receipts or independent success verification. Rejected requests do not
-write the private memory stream. A separate append-only decision/audit trail,
-BOB and derived/cumulative-disclosure accounting, semantic recovery, independent
-result verification, full Gate/Redivous integration and Linux filesystem isolation
-remain follow-up work. Existing provider-error replies still require typed outcome
-handling; an HTTP 200 must not be read as successful completion of a task.
+Memory entries record grant ID, authenticated subject and purpose separately
+from caller event labels. Chat and handshake now also use a separately authorized
+hash-linked receipt chain and typed outcomes; see [Execution receipts](EXECUTION_RECEIPTS.md).
+Receipts do not establish approval or independently verified success. Other routes
+retain their existing behavior. BOB, cumulative-disclosure accounting, semantic
+recovery, independent result verification, full Gate/Redivous integration and
+Linux filesystem isolation remain follow-up work. HTTP 200 must not be read as
+independently verified completion of a task.
 
 Run all tests with the configured virtual-environment Python:
 

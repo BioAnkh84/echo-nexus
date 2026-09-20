@@ -104,3 +104,11 @@ Tests use synthetic temporary fixtures and mocked backend responses. Tests that
 need Flask are skipped explicitly when it is absent; no dependency is installed
 by the test suite. No listening service is started. The CLI, Windows launcher,
 and dashboard are separate legacy entry points and are not changed by this port.
+
+### Execution evidence
+
+Chat and handshake additionally require `receipt.append`. They return typed
+execution outcomes and hash-linked receipt references; returned output remains
+unverified. Provider failures return 502/503, and receipt failures stop execution
+with possible partial effects. See [Execution receipts](docs/EXECUTION_RECEIPTS.md)
+for scope, grant compatibility, verification and recovery limits.

@@ -4,6 +4,10 @@ from datetime import datetime, timezone
 import json
 import os
 import time
+import hashlib
+import uuid
+from receipts import ReceiptError, append_event, digest
+from outcomes import BackendFailure, ExecutionOutcome
 from authority import AuthorityDenied, authorize, read_import
 
 app = Flask(__name__)
@@ -66,7 +70,12 @@ ROUTE_ACTIONS = {
 @app.errorhandler(AuthorityDenied)
 def authority_denied(_error):
     # Never echo tokens, grant files, or caller-supplied authority claims.
-    return jsonify({"error": "No applicable authority grant", "decision": "ABORT"}), 403
+    payload = {"error": "No applicable authority grant", "decision": "ABORT"}
+    if getattr(g, "exchange_id", None):
+        payload["execution"] = {"state": "incomplete", "verification": "not_performed",
+                                "effects_may_have_occurred": True}
+        payload["receipt"] = receipt_reference()
+    return jsonify(payload), 403
 
 
 def require_authority(action=None):
@@ -78,6 +87,86 @@ def require_authority(action=None):
     if time.time() >= getattr(g, "handshake_expires_at", permission.expires_at):
         raise AuthorityDenied()
     return permission
+
+
+def receipt_reference():
+    return {"request_id": getattr(g, "exchange_id", None),
+            "tip": getattr(g, "receipt_tip", None)}
+
+
+def record_event(event, **details):
+    permission = require_authority("receipt.append")
+    g.receipt_tip = append_event(ECHO_ROOT, {
+        "event_id": uuid.uuid4().hex, "request_id": g.exchange_id,
+        "event": event, "action": g.route_action,
+        "grant_id": permission.grant_id, "grant_fingerprint": permission.fingerprint,
+        "subject": permission.subject, "purpose": permission.purpose,
+        "details": details,
+    })
+
+
+def begin_exchange():
+    require_authority("receipt.append")
+    g.exchange_id = uuid.uuid4().hex
+    record_event("authority_evaluated", decision="permitted_under_grant",
+                 gate_measurement="not_performed",
+                 input_sha256=hashlib.sha256(request.get_data()).hexdigest())
+
+
+def run_generation(generator, *args, **kwargs):
+    record_event("generation_attempted", backend="openai" if USE_OPENAI else "local_stub")
+    require_authority()
+    try:
+        reply = generator(*args, **kwargs)
+    except BackendFailure as failure:
+        record_event("generation_result", **failure.outcome.as_dict())
+        raise
+    outcome = ExecutionOutcome("returned_unverified", "openai" if USE_OPENAI else "local_stub",
+                               "response_received" if USE_OPENAI else "not_attempted")
+    record_event("generation_result", **outcome.as_dict(),
+                 output_sha256=hashlib.sha256(reply.encode()).hexdigest())
+    g.generation_outcome = outcome
+    return reply
+
+
+def complete_exchange(payload):
+    previous = g.generation_outcome
+    outcome = ExecutionOutcome("completed_unverified", previous.backend, previous.transmission)
+    payload["execution"] = outcome.as_dict()
+    # This is preparation, not evidence of actual network delivery to a client.
+    record_event("execution_result", **outcome.as_dict(), response_sha256=digest(payload),
+                 delivery="unknown")
+    payload["receipt"] = receipt_reference()
+    return jsonify(payload), 200
+
+
+@app.errorhandler(BackendFailure)
+def backend_failed(error):
+    return jsonify({"error": "Backend did not return a usable result",
+                    "execution": error.outcome.as_dict(),
+                    "receipt": receipt_reference()}), (503 if error.outcome.transmission == "not_attempted" else 502)
+
+
+@app.errorhandler(ReceiptError)
+def receipt_failed(_error):
+    return jsonify({"error": "Receipt unavailable; execution stopped",
+                    "execution": {"state": "incomplete", "verification": "not_performed",
+                                  "effects_may_have_occurred": True},
+                    "receipt": receipt_reference()}), 503
+
+
+@app.errorhandler(OSError)
+def io_failed(_error):
+    if getattr(g, "exchange_id", None):
+        try:
+            record_event("execution_incomplete", reason="io_error", effects_may_have_occurred=True,
+                         verification="not_performed")
+        except (ReceiptError, AuthorityDenied):
+            pass  # Preserve the last event; never invent a completed receipt.
+    return jsonify({"error": "I/O unavailable; execution stopped",
+                    "execution": {"state": "incomplete", "verification": "not_performed",
+                                  "effects_may_have_occurred": True},
+                    "receipt": receipt_reference()}), 503
 
 
 @app.before_request
@@ -96,6 +185,7 @@ def protect_data_routes():
     if request.method == "POST" and not isinstance(request.get_json(silent=True), dict):
         return jsonify({"error": "JSON object required"}), 400
     if action in {"cipher.chat", "vexis.chat", "echo.handshake"}:
+        require_authority("receipt.append")
         if USE_OPENAI:
             require_authority("external.openai")
             if SEND_MEMORY:
@@ -141,9 +231,19 @@ def append_jsonl(path, data):
                                     "subject": permission.subject,
                                     "purpose": permission.purpose})
     path = Path(path)
+    line = json.dumps(data, ensure_ascii=False) + "\n"
+    audited = getattr(g, "exchange_id", None) is not None
+    resource = "cipher.memory" if path == MEMORY_STREAM else "vexis.memory"
+    entry_hash = hashlib.sha256(line.encode()).hexdigest()
+    if audited:
+        record_event("memory_append_attempted", resource=resource, entry_sha256=entry_hash)
+        require_authority()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(data, ensure_ascii=False) + "\n")
+        f.write(line)
+    if audited:
+        record_event("memory_append_result", resource=resource, entry_sha256=entry_hash,
+                     state="write_returned_unverified", verification="not_performed")
 
 
 
@@ -241,17 +341,27 @@ def generate_cipher_reply(message: str, user: str) -> str:
     require_authority("external.openai")
     try:
         backend = get_client()
-        require_authority("external.openai")
-        resp = backend.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-        )
-        content = resp.choices[0].message.content
-        return content.strip() if content else f"(Cipher) I received: {message}"
-    except AuthorityDenied:
-        raise
     except Exception:
-        return "(Cipher) External backend unavailable."
+        raise BackendFailure(ExecutionOutcome("failed", "openai", "not_attempted",
+                                              "client_initialization_failed")) from None
+    require_authority("external.openai")
+    record_event("provider_attempted", destination="openai", model=OPENAI_MODEL,
+                 payload_sha256=digest(messages), transmission="unknown")
+    require_authority("external.openai")
+    try:
+        resp = backend.chat.completions.create(model=OPENAI_MODEL, messages=messages)
+    except Exception:
+        # A timeout/error does not prove that the provider received nothing.
+        raise BackendFailure(ExecutionOutcome("outcome_unknown", "openai", "unknown",
+                                              "provider_request_failed")) from None
+    try:
+        content = resp.choices[0].message.content
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("No text result")
+    except (AttributeError, IndexError, TypeError, ValueError):
+        raise BackendFailure(ExecutionOutcome("failed", "openai", "response_received",
+                                              "invalid_provider_response")) from None
+    return content.strip()
 
 
 def generate_vexis_reply(message: str, user: str) -> str:
@@ -282,17 +392,27 @@ def generate_vexis_reply(message: str, user: str) -> str:
     require_authority("external.openai")
     try:
         backend = get_client()
-        require_authority("external.openai")
-        resp = backend.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-        )
-        content = resp.choices[0].message.content
-        return content.strip() if content else f"(Vexis) I received: {message}"
-    except AuthorityDenied:
-        raise
     except Exception:
-        return "(Vexis) External backend unavailable."
+        raise BackendFailure(ExecutionOutcome("failed", "openai", "not_attempted",
+                                              "client_initialization_failed")) from None
+    require_authority("external.openai")
+    record_event("provider_attempted", destination="openai", model=OPENAI_MODEL,
+                 payload_sha256=digest(messages), transmission="unknown")
+    require_authority("external.openai")
+    try:
+        resp = backend.chat.completions.create(model=OPENAI_MODEL, messages=messages)
+    except Exception:
+        # A timeout/error does not prove that the provider received nothing.
+        raise BackendFailure(ExecutionOutcome("outcome_unknown", "openai", "unknown",
+                                              "provider_request_failed")) from None
+    try:
+        content = resp.choices[0].message.content
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("No text result")
+    except (AttributeError, IndexError, TypeError, ValueError):
+        raise BackendFailure(ExecutionOutcome("failed", "openai", "response_received",
+                                              "invalid_provider_response")) from None
+    return content.strip()
 
 
 
@@ -437,11 +557,12 @@ def cipher_chat():
     message = data.get("message")
     user = g.permission.subject
 
-    if not message:
-        return jsonify({"error": "Missing 'message'"}), 400
+    if not isinstance(message, str) or not message.strip():
+        return jsonify({"error": "Nonempty message string required"}), 400
 
     # Get a reply from Cipher's brain
-    reply_text = generate_cipher_reply(message, user)
+    begin_exchange()
+    reply_text = run_generation(generate_cipher_reply, message, user)
 
     # Log the incoming chat as an event
     entry_user = {
@@ -471,7 +592,7 @@ def cipher_chat():
     }
     append_jsonl(MEMORY_STREAM, entry_cipher)
 
-    return jsonify({"reply": reply_text}), 200
+    return complete_exchange({"reply": reply_text})
 
 
 @app.route("/vexis/import", methods=["POST"])
@@ -489,10 +610,11 @@ def vexis_chat():
     message = data.get("message")
     user = g.permission.subject
 
-    if not message:
-        return jsonify({"error": "Missing 'message'"}), 400
+    if not isinstance(message, str) or not message.strip():
+        return jsonify({"error": "Nonempty message string required"}), 400
 
-    reply_text = generate_vexis_reply(message, user)
+    begin_exchange()
+    reply_text = run_generation(generate_vexis_reply, message, user)
 
     # Log user's message
     entry_user = {
@@ -518,7 +640,7 @@ def vexis_chat():
     }
     append_jsonl(VEXIS_MEMORY_STREAM, entry_vexis)
 
-    return jsonify({"reply": reply_text}), 200
+    return complete_exchange({"reply": reply_text})
 @app.route("/echo/handshake", methods=["POST"])
 def echo_handshake():
     """An authenticated advisory exchange; payload names never grant consent."""
@@ -539,7 +661,8 @@ def echo_handshake():
     incoming_msg = data.get("message")
     if not isinstance(incoming_msg, str) or not incoming_msg.strip():
         return jsonify({"error": "Message required"}), 400
-    reply_text = generate_vexis_reply(
+    begin_exchange()
+    reply_text = run_generation(generate_vexis_reply,
         f"Advisory handshake from {sender}. Message: {incoming_msg}", user=sender)
 
     now_ts = datetime.now(tz=timezone.utc).isoformat()
@@ -584,7 +707,7 @@ def echo_handshake():
         "reply_text": reply_text,
         "timestamp": now_ts,
     }
-    return jsonify(response), 200
+    return complete_exchange(response)
 
 
 
