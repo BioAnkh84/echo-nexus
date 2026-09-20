@@ -1,14 +1,16 @@
-﻿from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from pathlib import Path, PureWindowsPath
 from datetime import datetime, timezone
 import json
 import os
+import time
+from authority import AuthorityDenied, authorize, read_import
 
 app = Flask(__name__)
 
 # --- Model / brain config ---
 def enabled(name):
-    # Only the literal value 1 grants permission; typos fail closed.
+    # Capability switch only; an applicable operator-provisioned grant is also required.
     return os.environ.get(name, "0") == "1"
 
 
@@ -26,12 +28,14 @@ SEND_MEMORY = enabled("ECHO_NEXUS_SEND_MEMORY_TO_OPENAI")
 DATA_ROUTES = enabled("ECHO_NEXUS_ENABLE_DATA_ROUTES")
 OPENAI_MODEL = "gpt-4.1-mini"
 client = None
+GRANTS_FILE = data_root(os.environ.get("ECHO_NEXUS_GRANTS_FILE"))
 ECHO_ROOT = data_root(os.environ.get("ECHO_NEXUS_ROOT"))
 if DATA_ROUTES and ECHO_ROOT is None:
     raise ValueError("Protected routes require explicit ECHO_NEXUS_ROOT")
 MEMORY_STREAM = ECHO_ROOT / "memory" / "streams" / "root_memory.jsonl" if ECHO_ROOT else None
 VEXIS_MEMORY_STREAM = ECHO_ROOT / "memory" / "streams" / "vexis_memory.jsonl" if ECHO_ROOT else None
 app.config["DEBUG"] = False
+app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
 
 
 def get_client():
@@ -40,17 +44,62 @@ def get_client():
         raise RuntimeError("External backend disabled")
     if client is None:
         from openai import OpenAI
-        client = OpenAI()
+        client = OpenAI(base_url="https://api.openai.com/v1", max_retries=0, timeout=15.0)
     return client
+
+
+# Each route action includes its documented local reads/writes. External
+# disclosure and stored-memory export need separate actions in the same grant.
+ROUTE_ACTIONS = {
+    "cipher_import": "cipher.import",
+    "cipher_memory_tail": "cipher.memory.read",
+    "vexis_memory_tail": "vexis.memory.read",
+    "cipher_state": "cipher.state.read",
+    "cipher_log": "cipher.log",
+    "cipher_chat": "cipher.chat",
+    "vexis_import": "vexis.import",
+    "vexis_chat": "vexis.chat",
+    "echo_handshake": "echo.handshake",
+}
+
+
+@app.errorhandler(AuthorityDenied)
+def authority_denied(_error):
+    # Never echo tokens, grant files, or caller-supplied authority claims.
+    return jsonify({"error": "No applicable authority grant", "decision": "ABORT"}), 403
+
+
+def require_authority(action=None):
+    permission = authorize(GRANTS_FILE, request.headers.get("Authorization", ""),
+                           request.headers.get("X-Echo-Purpose", ""),
+                           action or g.route_action, data_root=ECHO_ROOT)
+    if permission.fingerprint != g.permission.fingerprint:
+        raise AuthorityDenied()
+    if time.time() >= getattr(g, "handshake_expires_at", permission.expires_at):
+        raise AuthorityDenied()
+    return permission
 
 
 @app.before_request
 def protect_data_routes():
-    # Allowlist public endpoints so new routes fail closed by default.
-    if not DATA_ROUTES and request.endpoint not in {
-        "health", "echo_status", "cipher_client_page"
-    }:
+    if request.endpoint in {"health", "echo_status", "cipher_client_page"}:
+        return None
+    if not DATA_ROUTES:
         return jsonify({"error": "Protected routes disabled"}), 403
+    action = ROUTE_ACTIONS.get(request.endpoint)
+    if action is None or request.method not in {"GET", "POST"}:
+        raise AuthorityDenied()
+    g.route_action = action
+    g.permission = authorize(GRANTS_FILE, request.headers.get("Authorization", ""),
+                             request.headers.get("X-Echo-Purpose", ""), action,
+                             data_root=ECHO_ROOT)
+    if request.method == "POST" and not isinstance(request.get_json(silent=True), dict):
+        return jsonify({"error": "JSON object required"}), 400
+    if action in {"cipher.chat", "vexis.chat", "echo.handshake"}:
+        if USE_OPENAI:
+            require_authority("external.openai")
+            if SEND_MEMORY:
+                require_authority("memory.export")
 
 
 @app.route("/healthz", methods=["GET"])
@@ -72,6 +121,10 @@ CIPHER_STATE = {
 def append_jsonl(path, data):
     if not DATA_ROUTES:
         raise RuntimeError("Protected writes disabled")
+    permission = require_authority()
+    data = dict(data, authorization={"grant_id": permission.grant_id,
+                                    "subject": permission.subject,
+                                    "purpose": permission.purpose})
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -86,6 +139,7 @@ def read_memory_tail(path: Path, limit: int = 20):
     """
     if not DATA_ROUTES:
         raise RuntimeError("Protected reads disabled")
+    require_authority()
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8") as f:
@@ -114,6 +168,7 @@ def build_chat_history(path: Path, persona_tag: str, user: str, max_turns: int =
 
     Returns a list of {role, content} messages suitable for OpenAI chat.
     """
+    require_authority("memory.export")
     entries = read_memory_tail(path, 200)
     dialog = []
 
@@ -168,6 +223,7 @@ def generate_cipher_reply(message: str, user: str) -> str:
     messages.extend(history)
     messages.append({"role": "user", "content": message})
 
+    require_authority("external.openai")
     try:
         resp = get_client().chat.completions.create(
             model=OPENAI_MODEL,
@@ -204,6 +260,7 @@ def generate_vexis_reply(message: str, user: str) -> str:
     messages.extend(history)
     messages.append({"role": "user", "content": message})
 
+    require_authority("external.openai")
     try:
         resp = get_client().chat.completions.create(
             model=OPENAI_MODEL,
@@ -218,39 +275,28 @@ def generate_vexis_reply(message: str, user: str) -> str:
 
 # --- ENDPOINTS ---
 
+def import_seed(persona):
+    data = request.get_json()
+    permission = require_authority()
+    filename = data.get("file")
+    try:
+        seed = read_import(ECHO_ROOT, filename, permission)
+    except AuthorityDenied:
+        raise
+    except (OSError, ValueError, TypeError, RecursionError):
+        return jsonify({"error": "Import unavailable or invalid"}), 400
+    # Parsing restores data only, never an authority grant.
+    require_authority()
+    prefix = "" if persona == "cipher" else "vexis_"
+    CIPHER_STATE[prefix + "seed"] = seed
+    CIPHER_STATE[prefix + "import_path"] = str(ECHO_ROOT / "imports" / filename)
+    CIPHER_STATE[prefix + "imported_at_utc"] = datetime.now(tz=timezone.utc).isoformat()
+    return jsonify({"file": filename, "seed": seed, "status": "imported"}), 200
+
+
 @app.route("/cipher/import", methods=["POST"])
 def cipher_import():
-    """Import your cipher_import_seed.json and store it as the active seed."""
-    data = request.get_json(force=True) or {}
-    path = data.get("path")
-    if not path:
-        return jsonify({"error": "Missing 'path' in JSON body"}), 400
-
-    p = Path(path)
-    if not p.exists():
-        return jsonify({"error": f"File not found: {path}"}), 404
-
-    try:
-        # Read as text and manually strip UTF-8 BOM if present
-        with p.open("r", encoding="utf-8") as f:
-            text = f.read()
-        if text.startswith("\ufeff"):
-            text = text.lstrip("\ufeff")
-        seed = json.loads(text)
-    except Exception as e:
-        return jsonify({"error": f"Failed to load JSON: {e!s}"}), 500
-
-    # Update in-process state
-    CIPHER_STATE["seed"] = seed
-    CIPHER_STATE["import_path"] = str(p)
-    CIPHER_STATE["imported_at_utc"] = datetime.now(tz=timezone.utc).isoformat()
-
-    # Match the shape you already saw: path + seed + status
-    return jsonify({
-        "path": str(p),
-        "seed": seed,
-        "status": "imported"
-    }), 200
+    return import_seed("cipher")
 
 
 @app.route("/cipher/memory/tail", methods=["GET"])
@@ -366,7 +412,7 @@ def cipher_chat():
     """
     data = request.get_json(force=True) or {}
     message = data.get("message")
-    user = data.get("user", "Richard")
+    user = g.permission.subject
 
     if not message:
         return jsonify({"error": "Missing 'message'"}), 400
@@ -407,37 +453,7 @@ def cipher_chat():
 
 @app.route("/vexis/import", methods=["POST"])
 def vexis_import():
-    """
-    Import the Vexis seed and track it in CIPHER_STATE.
-    Body: { "path": "/explicit/synthetic-fixtures/vexis_seed.json" }
-    """
-    data = request.get_json(force=True) or {}
-    path = data.get("path")
-    if not path:
-        return jsonify({"error": "Missing 'path' in JSON body"}), 400
-
-    p = Path(path)
-    if not p.exists():
-        return jsonify({"error": f"File not found: {path}"}), 404
-
-    try:
-        with p.open("r", encoding="utf-8") as f:
-            text = f.read()
-        if text.startswith("\ufeff"):
-            text = text.lstrip("\ufeff")
-        seed = json.loads(text)
-    except Exception as e:
-        return jsonify({"error": f"Failed to load JSON: {e!s}"}), 500
-
-    CIPHER_STATE["vexis_seed"] = seed
-    CIPHER_STATE["vexis_import_path"] = str(p)
-    CIPHER_STATE["vexis_imported_at_utc"] = datetime.now(tz=timezone.utc).isoformat()
-
-    return jsonify({
-        "path": str(p),
-        "seed": seed,
-        "status": "vexis_imported"
-    }), 200
+    return import_seed("vexis")
 
 
 @app.route("/vexis/chat", methods=["POST"])
@@ -448,7 +464,7 @@ def vexis_chat():
     """
     data = request.get_json(force=True) or {}
     message = data.get("message")
-    user = data.get("user", "Richard")
+    user = g.permission.subject
 
     if not message:
         return jsonify({"error": "Missing 'message'"}), 400
@@ -482,59 +498,26 @@ def vexis_chat():
     return jsonify({"reply": reply_text}), 200
 @app.route("/echo/handshake", methods=["POST"])
 def echo_handshake():
-    """
-    Cross-AI handshake endpoint.
-
-    Expected payload example (from Grok, etc.):
-
-    {
-      "from": "Grok@xAI",
-      "to": "Vexis@EchoNexus",
-      "purpose_token": {
-        "scope": "observe_and_respond",
-        "ttl": 1730966400,
-        "consent": "Richard Rice"
-      },
-      "message": "Nexus online. ψ stable. Requesting co-resonance check...",
-      "checksum": "0xGROK...SYNC"
-    }
-    """
-    data = request.get_json(force=True) or {}
-
-    sender = data.get("from", "Unknown")
-    target = data.get("to", "Vexis@EchoNexus")
-    purpose = data.get("purpose_token") or {}
-    consent_name = purpose.get("consent")
-    scope = purpose.get("scope", "")
-    ttl = purpose.get("ttl")  # TODO: enforce expiry if you want
-
-    # --- Consent check (hard gate) ---
-    if consent_name != "Richard Rice":
-        # Log the failed attempt into Vexis memory for forensics
-        entry_denied = {
-            "ts": datetime.now(tz=timezone.utc).isoformat(),
-            "kind": "event",
-            "channel": "handshake",
-            "author": sender,
-            "tags": ["handshake", "denied", "consent"],
-            "summary": "Handshake denied: consent mismatch",
-            "details": {
-                "expected_consent": "Richard Rice",
-                "provided_consent": consent_name,
-                "scope": scope,
-                "raw": data,
-            },
-        }
-        append_jsonl(VEXIS_MEMORY_STREAM, entry_denied)
-        return jsonify({"error": "Consent validation failed"}), 403
-
-    # --- Build reply using Vexis' brain ---
-    incoming_msg = data.get("message") or "Handshake ping received."
-    # We still anchor 'user' as Richard for Vexis' internal context
+    """An authenticated advisory exchange; payload names never grant consent."""
+    data = request.get_json()
+    permission = require_authority()
+    sender = data.get("from")
+    target = data.get("to")
+    purpose = data.get("purpose_token")
+    if not isinstance(purpose, dict):
+        return jsonify({"error": "Bounded purpose_token required"}), 400
+    scope = purpose.get("scope")
+    ttl = purpose.get("ttl")
+    if (sender != permission.subject or target != "Vexis@EchoNexus"
+            or scope != "echo.handshake" or type(ttl) is not int
+            or not time.time() < ttl <= permission.expires_at):
+        raise AuthorityDenied()
+    g.handshake_expires_at = ttl
+    incoming_msg = data.get("message")
+    if not isinstance(incoming_msg, str) or not incoming_msg.strip():
+        return jsonify({"error": "Message required"}), 400
     reply_text = generate_vexis_reply(
-        f"Handshake from {sender} with scope='{scope}'. Message: {incoming_msg}",
-        user="Richard",
-    )
+        f"Advisory handshake from {sender}. Message: {incoming_msg}", user=sender)
 
     now_ts = datetime.now(tz=timezone.utc).isoformat()
 
@@ -544,9 +527,9 @@ def echo_handshake():
         "kind": "event",
         "channel": "handshake",
         "author": sender,
-        "tags": ["handshake", "grok", "vexis", "in"],
+        "tags": ["handshake", "external", "vexis", "in"],
         "summary": f"Handshake from {sender} to {target}",
-        "details": data,
+        "details": {"message": incoming_msg, "scope": scope, "ttl": ttl},
     }
     append_jsonl(VEXIS_MEMORY_STREAM, entry_in)
 
@@ -556,7 +539,7 @@ def echo_handshake():
         "kind": "memory",
         "channel": "handshake",
         "author": "Vexis",
-        "tags": ["handshake", "grok", "vexis", "out"],
+        "tags": ["handshake", "external", "vexis", "out"],
         "summary": f"Vexis handshake reply to {sender}",
         "details": {
             "text": reply_text,
@@ -571,11 +554,10 @@ def echo_handshake():
         "from": "Vexis@EchoNexus",
         "to": sender,
         "ack": True,
-        "status": "RES0NANT",
-        "psi_eff": 1.38,   # you can wire this to a real metric later
-        "delta": 0.03,     # same here
+        "status": "advisory_response",
+        "verification": "not_independently_verified",
         "scope": scope,
-        "consent": consent_name,
+        "grant_id": permission.grant_id,
         "reply_text": reply_text,
         "timestamp": now_ts,
     }
@@ -724,6 +706,13 @@ def cipher_client_page():
         <div class="sub">Local habitat for Cipher &amp; Vexis. All chats are logged to JSONL streams.</div>
 
         <div class="row">
+          <label for="grantToken">Grant token:</label>
+          <input id="grantToken" type="password" autocomplete="off" spellcheck="false">
+          <label for="grantPurpose">Granted purpose:</label>
+          <input id="grantPurpose" type="text" autocomplete="off">
+          <button id="clearGrant" type="button">Clear grant</button>
+        </div>
+        <div class="row">
           <label for="persona" class="label-inline"><strong>Persona:</strong></label>
           <select id="persona">
             <option value="cipher">Cipher (stable co-worker)</option>
@@ -748,6 +737,25 @@ def cipher_client_page():
       </div>
 
       <script>
+        document.getElementById('clearGrant').onclick = () => {
+          document.getElementById('grantToken').value = '';
+          document.getElementById('grantPurpose').value = '';
+        };
+        // Credentials remain only in these inputs; never persist or place in URLs.
+        async function grantedFetch(url, options = {}) {
+          const token = document.getElementById('grantToken').value;
+          const purpose = document.getElementById('grantPurpose').value;
+          if (!token || !purpose) throw new Error('Enter the operator-issued grant and purpose.');
+          const response = await fetch(url, {
+            ...options,
+            credentials: 'omit',
+            headers: {...(options.headers || {}),
+              Authorization: 'Bearer ' + token, 'X-Echo-Purpose': purpose}
+          });
+          if (!response.ok) throw new Error('Request refused or failed (' + response.status + ').');
+          return response;
+        }
+
         async function refreshTail() {
           const logDiv = document.getElementById('log');
           const source = document.getElementById('logSource').value;
@@ -759,7 +767,7 @@ def cipher_client_page():
           }
 
           try {
-            const res = await fetch(url);
+            const res = await grantedFetch(url);
             const data = await res.json();
             const entries = data.entries || [];
             const lines = entries.map(e => {
@@ -796,14 +804,14 @@ def cipher_client_page():
           }
 
           try {
-            const res = await fetch(endpoint, {
+            const res = await grantedFetch(endpoint, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ user: 'Richard', message })
+              body: JSON.stringify({ message })
             });
             const data = await res.json();
             document.getElementById('msg').value = "";
-            await refreshTail();
+            logDiv.textContent = "Response received; success has not been independently verified.";
             if (data.reply) {
               logDiv.textContent += "\\n[reply] " + data.reply;
             }
