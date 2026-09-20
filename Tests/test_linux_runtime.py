@@ -95,7 +95,8 @@ class SafetyTests(unittest.TestCase):
                               SEND_MEMORY=send, DATA_ROUTES=routes,
                               MEMORY_STREAM=None, VEXIS_MEMORY_STREAM=None,
                               OPENAI_MODEL='mock', build_chat_history=history,
-                              get_client=lambda: backend, require_authority=lambda *args: None)
+                              get_client=lambda: backend, require_authority=lambda *args: None,
+                              record_event=lambda *args, **kwargs: None, digest=lambda value: "mock-hash")
                 ns[f'generate_{persona}_reply']('synthetic input', 'tester')
                 self.assertEqual(history.call_count, int(send and routes))
                 messages = backend.chat.completions.create.call_args.kwargs['messages']

@@ -166,7 +166,7 @@ class HttpAuthorityTests(GrantFixture, unittest.TestCase):
 
     def test_route_purpose_revocation_and_expiry_reject_before_write(self):
         original = copy.deepcopy(self.grant)
-        for change in ({'actions': ['cipher.chat']}, {'purpose': 'other'},
+        for change in ({'actions': ['cipher.chat', 'receipt.append']}, {'purpose': 'other'},
                        {'revoked': True}, {'expires_at': self.now - 1}):
             self.grant = dict(original, **change)
             self.save()
@@ -176,7 +176,7 @@ class HttpAuthorityTests(GrantFixture, unittest.TestCase):
         self.assertFalse(self.root.exists())
 
     def test_live_registry_revocation_stops_next_side_effect(self):
-        self.grant['actions'] = ['cipher.chat']
+        self.grant['actions'] = ['cipher.chat', 'receipt.append']
         self.save()
         def revoke(*args):
             self.grant['revoked'] = True
@@ -185,10 +185,11 @@ class HttpAuthorityTests(GrantFixture, unittest.TestCase):
         with patch.object(self.server, 'generate_cipher_reply', side_effect=revoke):
             response = self.http.post('/cipher/chat', headers=self.headers, json={'message': 'test'})
         self.assertEqual(response.status_code, 403)
-        self.assertFalse(self.root.exists())
+        self.assertFalse(self.server.MEMORY_STREAM.exists())
+        self.assertFalse(self.server.VEXIS_MEMORY_STREAM.exists())
 
     def test_handshake_requires_bound_sender_target_scope_and_ttl(self):
-        self.grant['actions'] = ['echo.handshake']
+        self.grant['actions'] = ['echo.handshake', 'receipt.append']
         self.save()
         body = {'from': 'synthetic-agent', 'to': 'Vexis@EchoNexus',
                 'message': 'synthetic', 'purpose_token': {'scope': 'echo.handshake', 'ttl': self.now + 300}}
@@ -210,7 +211,7 @@ class HttpAuthorityTests(GrantFixture, unittest.TestCase):
         self.assertNotIn('consent', result.json)
 
     def test_handshake_ttl_is_rechecked_before_write(self):
-        self.grant['actions'] = ['echo.handshake']
+        self.grant['actions'] = ['echo.handshake', 'receipt.append']
         self.save()
         def advance(*args, **kwargs):
             clock = patch.object(self.server.time, 'time', return_value=self.now + 301)
@@ -222,11 +223,12 @@ class HttpAuthorityTests(GrantFixture, unittest.TestCase):
                 json={'from': 'synthetic-agent', 'to': 'Vexis@EchoNexus', 'message': 'test',
                       'purpose_token': {'scope': 'echo.handshake', 'ttl': self.now + 300}})
         self.assertEqual(response.status_code, 403)
-        self.assertFalse(self.root.exists())
+        self.assertFalse(self.server.MEMORY_STREAM.exists())
+        self.assertFalse(self.server.VEXIS_MEMORY_STREAM.exists())
 
     def test_external_and_memory_disclosures_need_distinct_grants(self):
         self.server.USE_OPENAI = True
-        self.grant['actions'] = ['cipher.chat']
+        self.grant['actions'] = ['cipher.chat', 'receipt.append']
         self.save()
         with patch.object(self.server, 'get_client', side_effect=AssertionError('provider')):
             result = self.http.post('/cipher/chat', headers=self.headers, json={'message': 'test'})
@@ -240,7 +242,7 @@ class HttpAuthorityTests(GrantFixture, unittest.TestCase):
 
     def test_revocation_during_client_setup_prevents_provider_request(self):
         self.server.USE_OPENAI = True
-        self.grant['actions'] = ['cipher.chat', 'external.openai']
+        self.grant['actions'] = ['cipher.chat', 'external.openai', 'receipt.append']
         self.save()
         backend = Mock()
         def revoke():
@@ -251,7 +253,8 @@ class HttpAuthorityTests(GrantFixture, unittest.TestCase):
             response = self.http.post('/cipher/chat', headers=self.headers, json={'message': 'test'})
         self.assertEqual(response.status_code, 403)
         backend.chat.completions.create.assert_not_called()
-        self.assertFalse(self.root.exists())
+        self.assertFalse(self.server.MEMORY_STREAM.exists())
+        self.assertFalse(self.server.VEXIS_MEMORY_STREAM.exists())
 
     def test_revocation_after_read_prevents_response_disclosure(self):
         self.grant['actions'] = ['cipher.memory.read']
@@ -268,7 +271,7 @@ class HttpAuthorityTests(GrantFixture, unittest.TestCase):
 
     def test_authorized_external_response_uses_mock_and_grant_subject(self):
         self.server.USE_OPENAI = True
-        self.grant['actions'] = ['cipher.chat', 'external.openai']
+        self.grant['actions'] = ['cipher.chat', 'external.openai', 'receipt.append']
         self.save()
         backend = Mock()
         backend.chat.completions.create.return_value = types.SimpleNamespace(
