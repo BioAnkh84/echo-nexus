@@ -77,7 +77,7 @@ class SafetyTests(unittest.TestCase):
         with patch.dict(sys.modules, {'openai': types.SimpleNamespace(OpenAI=factory)}):
             self.assertIs(ns['get_client'](), factory.return_value)
             self.assertIs(ns['get_client'](), factory.return_value)
-        factory.assert_called_once_with()
+        factory.assert_called_once_with(base_url='https://api.openai.com/v1', max_retries=0, timeout=15.0)
 
     def test_health_function_has_no_io(self):
         health = isolated('health', jsonify=lambda value: value)['health']
@@ -95,7 +95,7 @@ class SafetyTests(unittest.TestCase):
                               SEND_MEMORY=send, DATA_ROUTES=routes,
                               MEMORY_STREAM=None, VEXIS_MEMORY_STREAM=None,
                               OPENAI_MODEL='mock', build_chat_history=history,
-                              get_client=lambda: backend)
+                              get_client=lambda: backend, require_authority=lambda *args: None)
                 ns[f'generate_{persona}_reply']('synthetic input', 'tester')
                 self.assertEqual(history.call_count, int(send and routes))
                 messages = backend.chat.completions.create.call_args.kwargs['messages']
@@ -138,7 +138,8 @@ class FlaskRuntimeTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
         spec = importlib.util.spec_from_file_location('cipher_test_server', SOURCE)
         self.server = importlib.util.module_from_spec(spec)
-        with patch.dict(sys.modules, {'openai': None}):
+        with patch.dict(sys.modules, {'openai': None}), \
+             patch.object(sys, 'path', [str(SOURCE.parent), *sys.path]):
             spec.loader.exec_module(self.server)
         self.http = self.server.app.test_client()
 
@@ -167,13 +168,13 @@ class FlaskRuntimeTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 403, rule.rule)
         self.assertIn(b'protected routes disabled', self.http.get('/').data)
 
-    def test_opted_in_synthetic_write(self):
+    def test_capability_switch_alone_cannot_authorize_write(self):
         path = Path(self.temp.name) / 'synthetic.jsonl'
         with patch.object(self.server, 'DATA_ROUTES', True), \
              patch.object(self.server, 'MEMORY_STREAM', path):
             response = self.http.post('/cipher/log', json={'summary': 'synthetic', 'text': 'fixture'})
-            self.assertEqual(response.status_code, 200)
-            self.assertIn('fixture', path.read_text())
+            self.assertEqual(response.status_code, 403)
+            self.assertFalse(path.exists())
 
 
 if __name__ == '__main__':
