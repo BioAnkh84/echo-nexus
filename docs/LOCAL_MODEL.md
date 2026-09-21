@@ -24,7 +24,8 @@ isolated Python invocation with a minimal environment excluding inherited API
 keys and proxies. It imports neither Habitat nor its memory/tool code. Offline
 library settings are not an OS network or filesystem sandbox.
 
-Only the current message and a small advisory system prompt reach the model.
+By default, only the current message and a small advisory system prompt reach the model.
+Explicitly granted caller-supplied session context is described in [SESSION_CONTEXT.md](SESSION_CONTEXT.md).
 Stored memory export is not implemented for this backend. The usual authorized
 chat memory writes happen after generation. Limits: 4096 input characters, 2048
 input tokens, 64 new tokens, one worker per server process, and a 180-second

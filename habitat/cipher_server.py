@@ -7,7 +7,7 @@ import time
 import hashlib
 import uuid
 from receipts import ReceiptError, append_event, digest
-from local_model import generate as generate_local, LocalFailure
+from local_model import generate as generate_local, LocalFailure, validate_context
 from outcomes import BackendFailure, ExecutionOutcome
 from authority import AuthorityDenied, authorize, read_import
 
@@ -125,13 +125,19 @@ def run_generation(generator, *args, **kwargs):
     try:
         if USE_LOCAL:
             require_authority("local.generate")
+            context = getattr(g, "local_context", [])
+            def check_local_launch():
+                require_authority("local.generate")
+                if context:
+                    require_authority("local.context")
             record_event("local_model_attempted", model_path=str(LOCAL_MODEL_PATH),
                          input_sha256=hashlib.sha256(args[0].encode()).hexdigest(),
+                         context_entries=len(context), context_sha256=digest(context),
                          transmission="not_attempted")
             try:
                 reply = generate_local(LOCAL_MODEL_PATH, args[0],
                     "Cipher" if g.route_action == "cipher.chat" else "Vexis",
-                    lambda: require_authority("local.generate"))
+                    check_local_launch, **({"context": context} if context else {}))
             except LocalFailure as error:
                 raise BackendFailure(ExecutionOutcome("failed", "local_model", "not_attempted",
                                                       error.reason)) from None
@@ -203,6 +209,15 @@ def protect_data_routes():
                              data_root=ECHO_ROOT)
     if request.method == "POST" and not isinstance(request.get_json(silent=True), dict):
         return jsonify({"error": "JSON object required"}), 400
+    body = request.get_json(silent=True)
+    if isinstance(body, dict) and 'context' in body:
+        if not USE_LOCAL or action not in {"cipher.chat", "vexis.chat"}:
+            return jsonify({"error": "Context supported only for local chat"}), 400
+        require_authority("local.context")
+        try:
+            g.local_context = validate_context(body['context'])
+        except LocalFailure:
+            return jsonify({"error": "Context must be at most three user/assistant pairs and 4096 characters"}), 400
     if action in {"cipher.chat", "vexis.chat", "echo.handshake"}:
         require_authority("receipt.append")
         if USE_LOCAL:
