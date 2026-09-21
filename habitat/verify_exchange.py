@@ -82,10 +82,12 @@ def verify_exchange(ledger, memory, response, request_id, expected_tip):
         resource = 'cipher.memory' if action == 'cipher.chat' else 'vexis.memory'
         names = [e['event'] for e in selected]
         backend = selected[1]['details']['backend']
-        require(backend in {'local_stub', 'openai'})
+        require(backend in {'local_stub', 'openai', 'local_model'})
         prefix = ['authority_evaluated', 'generation_attempted']
         if backend == 'openai':
             prefix.append('provider_attempted')
+        elif backend == 'local_model':
+            prefix.append('local_model_attempted')
         require(names == prefix + ['generation_result', 'memory_append_attempted',
             'memory_append_result', 'memory_append_attempted', 'memory_append_result', 'execution_result'])
         admission = selected[0]['details']

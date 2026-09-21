@@ -7,6 +7,7 @@ import time
 import hashlib
 import uuid
 from receipts import ReceiptError, append_event, digest
+from local_model import generate as generate_local, LocalFailure
 from outcomes import BackendFailure, ExecutionOutcome
 from authority import AuthorityDenied, authorize, read_import
 
@@ -28,6 +29,10 @@ def data_root(value):
 
 
 USE_OPENAI = enabled("ECHO_NEXUS_ENABLE_OPENAI")
+USE_LOCAL = enabled("ECHO_NEXUS_ENABLE_LOCAL_MODEL")
+LOCAL_MODEL_PATH = data_root(os.environ.get("ECHO_NEXUS_LOCAL_MODEL_PATH"))
+if USE_LOCAL and (USE_OPENAI or LOCAL_MODEL_PATH is None):
+    raise ValueError("Local backend needs an explicit model path and OpenAI disabled")
 SEND_MEMORY = enabled("ECHO_NEXUS_SEND_MEMORY_TO_OPENAI")
 DATA_ROUTES = enabled("ECHO_NEXUS_ENABLE_DATA_ROUTES")
 OPENAI_MODEL = "gpt-4.1-mini"
@@ -114,14 +119,28 @@ def begin_exchange():
 
 
 def run_generation(generator, *args, **kwargs):
-    record_event("generation_attempted", backend="openai" if USE_OPENAI else "local_stub")
+    backend = "local_model" if USE_LOCAL else ("openai" if USE_OPENAI else "local_stub")
+    record_event("generation_attempted", backend=backend)
     require_authority()
     try:
-        reply = generator(*args, **kwargs)
+        if USE_LOCAL:
+            require_authority("local.generate")
+            record_event("local_model_attempted", model_path=str(LOCAL_MODEL_PATH),
+                         input_sha256=hashlib.sha256(args[0].encode()).hexdigest(),
+                         transmission="not_attempted")
+            try:
+                reply = generate_local(LOCAL_MODEL_PATH, args[0],
+                    "Cipher" if g.route_action == "cipher.chat" else "Vexis",
+                    lambda: require_authority("local.generate"))
+            except LocalFailure as error:
+                raise BackendFailure(ExecutionOutcome("failed", "local_model", "not_attempted",
+                                                      error.reason)) from None
+        else:
+            reply = generator(*args, **kwargs)
     except BackendFailure as failure:
         record_event("generation_result", **failure.outcome.as_dict())
         raise
-    outcome = ExecutionOutcome("returned_unverified", "openai" if USE_OPENAI else "local_stub",
+    outcome = ExecutionOutcome("returned_unverified", backend,
                                "response_received" if USE_OPENAI else "not_attempted")
     record_event("generation_result", **outcome.as_dict(),
                  output_sha256=hashlib.sha256(reply.encode()).hexdigest())
@@ -186,6 +205,8 @@ def protect_data_routes():
         return jsonify({"error": "JSON object required"}), 400
     if action in {"cipher.chat", "vexis.chat", "echo.handshake"}:
         require_authority("receipt.append")
+        if USE_LOCAL:
+            require_authority("local.generate")
         if USE_OPENAI:
             require_authority("external.openai")
             if SEND_MEMORY:
