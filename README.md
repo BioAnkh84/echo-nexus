@@ -119,3 +119,6 @@ It reports evidence consistency while keeping authority and task success unverif
 
 The optional [local model adapter](docs/LOCAL_MODEL.md) uses an explicitly granted,
 finite GPU worker and preserves typed outcomes and exchange receipts.
+
+[Session context](docs/SESSION_CONTEXT.md) is optional and requires `local.context`;
+it never implicitly loads older Habitat memory.
