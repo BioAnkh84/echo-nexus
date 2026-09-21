@@ -56,3 +56,6 @@ live Habitat, and its tests do not establish OBSERVED/VERIFIED task success.
 Next: bounded exported-evidence trial, then a local model adapter under the
 existing grant and execution-outcome contract. Domain-specific task correctness
 requires its own independently specified acceptance criteria and verifier.
+
+The optional local-model backend adds `local_model_attempted` before the generation
+result; the checker supports that event form without attesting model byte identity.

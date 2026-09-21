@@ -116,3 +116,6 @@ for scope, grant compatibility, verification and recovery limits.
 An independent [exchange evidence checker](docs/EXCHANGE_VERIFICATION.md) compares
 a captured response and memory snapshot against a supplied receipt-chain tip.
 It reports evidence consistency while keeping authority and task success unverified.
+
+The optional [local model adapter](docs/LOCAL_MODEL.md) uses an explicitly granted,
+finite GPU worker and preserves typed outcomes and exchange receipts.

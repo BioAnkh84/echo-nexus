@@ -94,6 +94,7 @@ Refresh Log is a separate operation requiring its own action permission.
 | `cipher.state.read` | Read imported Cipher state metadata. |
 | `cipher.import` / `vexis.import` | Read and return an allowlisted JSON seed and replace the corresponding in-process seed state. |
 | `echo.handshake` | Exchange advisory text with Vexis and append the exchange to Vexis memory. |
+| `local.generate` | Additional permission for finite inference with the operator-configured local model. |
 | `receipt.append` | Additional permission to append execution receipts; required for both chat routes and handshake. |
 | `external.openai` | Additional permission for chat/handshake text and persona context to be sent to OpenAI; also requires its capability switch. |
 | `memory.export` | Additional permission to include recent stored chat context; also requires both external permission and the memory capability switch. |
