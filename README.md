@@ -112,3 +112,7 @@ execution outcomes and hash-linked receipt references; returned output remains
 unverified. Provider failures return 502/503, and receipt failures stop execution
 with possible partial effects. See [Execution receipts](docs/EXECUTION_RECEIPTS.md)
 for scope, grant compatibility, verification and recovery limits.
+
+An independent [exchange evidence checker](docs/EXCHANGE_VERIFICATION.md) compares
+a captured response and memory snapshot against a supplied receipt-chain tip.
+It reports evidence consistency while keeping authority and task success unverified.
