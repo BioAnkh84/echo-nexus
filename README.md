@@ -122,3 +122,6 @@ finite GPU worker and preserves typed outcomes and exchange receipts.
 
 [Session context](docs/SESSION_CONTEXT.md) is optional and requires `local.context`;
 it never implicitly loads older Habitat memory.
+
+Use the maintained [bounded terminal session](docs/BOUNDED_SESSION.md) for
+interactive local chat, temporary grants, shutdown and saved evidence verification.
