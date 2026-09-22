@@ -53,7 +53,11 @@ def parse_args():
     parser.add_argument('--model', type=Path, help='Existing local model directory; no downloads')
     parser.add_argument('--grant-reference', required=True, help='Reference to the operator authorization for this session')
     parser.add_argument('--expected-commit', help='Reviewed repository commit required for interactive sessions')
+    parser.add_argument('--orientation', type=Path, help='Explicit reviewed historical package')
+    parser.add_argument('--orientation-sha256', help='Operator-reviewed package digest')
     args = parser.parse_args()
+    if bool(args.orientation) != bool(args.orientation_sha256) or (args.self_test and args.orientation):
+        parser.error('Orientation requires both path and digest, and a local-model session')
     if not args.output_dir.is_absolute() or not args.output_dir.is_dir():
         parser.error('--output-dir must be an existing absolute directory')
     if not args.grant_reference.strip():
@@ -73,8 +77,12 @@ def main():
     sys.path.insert(0, str(REPO / 'habitat'))
     from authority import CHARTER_SHA256
     from verify_exchange import verify_exchange, EvidenceError
+    from orientation import load as load_orientation
+    orientation = load_orientation(args.orientation, args.orientation_sha256) if args.orientation else None
     session = Path(tempfile.mkdtemp(prefix='cipher-session-', dir=args.output_dir))
     session.chmod(0o700)
+    if orientation is not None:
+        (session / 'orientation.json').write_bytes(orientation)
     root = session / 'data'
     responses = []
     history = []
@@ -94,7 +102,7 @@ def main():
             'subject': 'local-operator', 'audience': 'echo-nexus', 'purpose': 'bounded-interactive-session',
             'data_root': str(root), 'token_sha256': hashlib.sha256(token.encode()).hexdigest(),
             'issued_at': started - 1, 'expires_at': expiry, 'revoked': False,
-            'actions': ['cipher.chat', 'receipt.append'] + ([] if args.self_test else ['local.generate', 'local.context']),
+            'actions': ['cipher.chat', 'receipt.append'] + ([] if args.self_test else ['local.generate', 'local.context']) + (['local.orientation'] if orientation else []),
             'import_files': []}
         def save_grant():
             replacement = registry.with_suffix('.new')
@@ -105,7 +113,8 @@ def main():
         os.environ.clear()
         os.environ.update(ECHO_NEXUS_ENABLE_DATA_ROUTES='1', ECHO_NEXUS_ROOT=str(root),
             ECHO_NEXUS_GRANTS_FILE=str(registry), ECHO_NEXUS_ENABLE_LOCAL_MODEL='0' if args.self_test else '1',
-            ECHO_NEXUS_LOCAL_MODEL_PATH=str(args.model) if args.model else '')
+            ECHO_NEXUS_LOCAL_MODEL_PATH=str(args.model) if args.model else '',
+            ECHO_NEXUS_ORIENTATION_SHA256=args.orientation_sha256 or '')
         spec = importlib.util.spec_from_file_location('session_server', REPO / 'habitat/cipher_server.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -140,7 +149,7 @@ def main():
                     print('Message too long; limit is 4000 characters.', flush=True)
                     continue
                 request = urllib.request.Request(f'http://127.0.0.1:{httpd.server_port}/cipher/chat',
-                    data=json.dumps({'message': message, **({'context': history} if not args.self_test else {})}).encode(), headers={
+                    data=json.dumps({'message': message, **({'orientation': orientation.decode('utf-8')} if orientation else {}), **({'context': history} if not args.self_test else {})}).encode(), headers={
                     'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
                     'X-Echo-Purpose': grant['purpose']})
                 try:
@@ -214,7 +223,7 @@ def main():
                 tip = json.loads(ledger.splitlines()[-1])['hash_self']
                 for raw in responses:
                     request_id = json.loads(raw)['receipt']['request_id']
-                    results.append(verify_exchange(ledger, memory, raw, request_id, tip))
+                    results.append(verify_exchange(ledger, memory, raw, request_id, tip, orientation=orientation))
             except (EvidenceError, OSError, ValueError, KeyError, IndexError):
                 failed = True
                 notes.append('Evidence check failed; preserve files for review.')
