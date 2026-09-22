@@ -69,6 +69,32 @@ class FactsHttpTests(test_local_model.LocalHttpTests):
         self.assertFalse(self.server.MEMORY_STREAM.exists())
 
 class FactsSessionTests(test_session.SessionTests):
+    def test_launcher_summary_reflects_selected_notes_without_model_claims(self):
+        from test_orientation import package
+        raw, pin = package()
+        self.args.orientation = self.root / 'notes.json'
+        self.args.orientation.write_bytes(raw)
+        self.args.orientation_sha256 = pin
+        self.args.session_facts = True
+        with patch('builtins.print') as printed:
+            code, report, folder = self.run_session(['/quit'])
+        self.assertEqual(code, 0)
+        summary = json.loads((folder / 'source-summary.json').read_text())
+        self.assertEqual(summary, report['source_summary'])
+        self.assertEqual(summary['historical_note_count'], 1)
+        self.assertEqual(summary['historical_package_sha256'], pin)
+        self.assertTrue(summary['current_request_facts_enabled'])
+        self.assertEqual(report['completed_responses'], 0)
+        self.assertTrue(any('1 reviewed notes' in str(call) for call in printed.call_args_list))
+
+    def test_launcher_summary_does_not_invent_disabled_sources(self):
+        code, report, folder = self.run_session(['/quit'])
+        self.assertEqual(code, 0)
+        summary = report['source_summary']
+        self.assertEqual(summary['historical_note_count'], 0)
+        self.assertIsNone(summary['historical_package_sha256'])
+        self.assertFalse(summary['current_request_facts_enabled'])
+
     def test_fresh_snapshots_and_saved_evidence_cleanup(self):
         self.args.session_facts = True
         seen = []

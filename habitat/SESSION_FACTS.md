@@ -50,3 +50,17 @@ The prompt now explicitly distinguishes server-derived current configuration,
 separately supplied historical summaries, and user messages. No source is promoted
 to permission, direct archive access, or health proof. The same fixed questions are
 retained for comparison; the revised prompt still needs host semantic observation.
+
+## Operator-visible source summary
+
+At startup the launcher prints and saves source-summary.json from its selected
+configuration: the validated historical note count and package digest, whether
+current facts are enabled, session-context policy and absent model interfaces.
+The same object is included in the final session report. This is explicitly a
+launcher configuration report, not model output or proof that generation used
+those inputs. Successful per-request snapshots and receipt bindings provide the
+separate supplied-input evidence. No notes or facts are fabricated when disabled.
+
+The model's generic memory self-description remained incomplete in two host trials.
+That limitation remains open. The operator summary does not repair or hide it;
+targeted historical-note recall and source attribution are evaluated separately.

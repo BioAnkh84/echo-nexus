@@ -86,6 +86,18 @@ def main():
     session.chmod(0o700)
     if orientation is not None:
         (session / 'orientation.json').write_bytes(orientation)
+    source_summary = {
+        'source': 'launcher_configuration_not_model_output',
+        'historical_note_count': len(json.loads(orientation)['notes']) if orientation else 0,
+        'historical_package_sha256': hashlib.sha256(orientation).hexdigest() if orientation else None,
+        'current_request_facts_enabled': args.session_facts,
+        'conversation_context': 'none' if args.self_test else 'up_to_three_prior_exchanges_this_session',
+        'model_tools': 'none_provided',
+        'live_habitat_interface': 'not_provided',
+        'persistent_archive_retrieval': 'not_enabled',
+        'claim_scope': 'configured_sources_not_proof_of_model_use_or_permission',
+    }
+    (session / 'source-summary.json').write_text(json.dumps(source_summary, indent=2) + '\n')
     root = session / 'data'
     responses = []
     history = []
@@ -99,6 +111,11 @@ def main():
     print('Session files (including your messages):', session, flush=True)
     print('Five messages maximum; ten-minute grant. /quit ends the session.', flush=True)
     print('Context: up to three prior exchanges from this session only. Responses remain unverified.', flush=True)
+    print('Configured sources (launcher report, not model output):', flush=True)
+    print(f"  Historical summaries: {source_summary['historical_note_count']} reviewed notes; "
+          f"current-request facts: {'enabled' if args.session_facts else 'disabled'}.", flush=True)
+    print('  Model tools: none. Live Habitat interface and persistent archive retrieval: not provided.', flush=True)
+    print('  These settings do not prove model use, grant authority, or establish runtime health.', flush=True)
     with tempfile.TemporaryDirectory(prefix='cipher-session-grant-', dir=session) as temporary:
         registry = Path(temporary) / 'grant.json'
         grant = {'grant_id': session.name, 'human_grant_reference': args.grant_reference.strip(),
@@ -239,7 +256,7 @@ def main():
         else:
             notes.append('No completed response available to verify.')
         report = {'commit': sha, 'checkout_dirty': dirty, 'self_test': args.self_test, 'backend': 'local_stub' if args.self_test else 'local_model',
-            'session_facts_enabled': args.session_facts,
+            'source_summary': source_summary, 'session_facts_enabled': args.session_facts,
             'server_stopped': True, 'grant_revoked': revoked, 'completed_responses': len(responses),
             'verifications': results, 'notes': notes, 'task_success_verified': False,
             'tip_provenance': 'Read from stopped-server snapshot; not an independent trusted anchor.'}
