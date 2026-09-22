@@ -79,3 +79,23 @@ class BindingTests(fixtures.GrantFixture, unittest.TestCase):
         with self.assertRaises(OSError): self.check_binding()
         self.proposal['evidence']['valid_until'] = self.now
         with self.assertRaises(binding.BindingError): self.check_binding()
+
+    def test_still_valid_grant_change_is_rejected(self):
+        original = binding.snapshot
+        def read(path):
+            raw = original(path)
+            if path == self.source_path:
+                self.grant['expires_at'] += 60; self.save()
+            return raw
+        with patch.object(binding, 'snapshot', side_effect=read):
+            with self.assertRaises(binding.BindingError): self.check_binding()
+
+    def test_duplicate_record_and_oversized_source_are_rejected(self):
+        raw = self.record_path.read_text()
+        self.record_path.write_text(raw[:-1] + ', "schema_version": 1}')
+        self.pin = hashlib.sha256(self.record_path.read_bytes()).hexdigest()
+        with self.assertRaises(binding.BindingError): self.check_binding()
+        self.record_path.write_text(json.dumps(self.record))
+        self.pin = hashlib.sha256(self.record_path.read_bytes()).hexdigest()
+        self.source_path.write_bytes(b'x' * (binding.LIMIT + 1))
+        with self.assertRaises(binding.BindingError): self.check_binding()
