@@ -42,3 +42,11 @@ Synthetic tests cover missing/revoked permission, client spoofing, snapshot
 binding even when a response hash is recomputed, per-request freshness of IDs and
 context counts, response persistence, and loopback lifecycle cleanup. Host semantic
 trials remain necessary to observe whether the model describes its setting accurately.
+
+The initial three-session host trial confirmed snapshot/receipt binding and local
+Linux grounding but exposed source confusion: the model omitted supplied historical
+summaries from its access description and called current facts historical evidence.
+The prompt now explicitly distinguishes server-derived current configuration,
+separately supplied historical summaries, and user messages. No source is promoted
+to permission, direct archive access, or health proof. The same fixed questions are
+retained for comparison; the revised prompt still needs host semantic observation.
