@@ -22,7 +22,7 @@ class WorkerTests(unittest.TestCase):
     def test_spawn_is_bounded_and_environment_isolated(self):
         callback = Mock()
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'synthetic-secret'}), patch.object(
-                local_model.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{"reply":"4"}')) as run:
+                local_model.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, json.dumps({'reply': '4', 'generation': {'finish_reason': 'eos', 'generated_tokens': 2, 'max_new_tokens': 64}}))) as run:
             self.assertEqual(local_model.generate(self.root, '2+2', 'Cipher', callback), '4')
         callback.assert_called_once()
         self.assertEqual(run.call_args.kwargs['timeout'], 180)

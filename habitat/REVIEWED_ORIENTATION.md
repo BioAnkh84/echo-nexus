@@ -54,3 +54,19 @@ This is model guidance, not a new enforcement mechanism. Existing grant checks
 remain the runtime permission boundary. Responses remain unverified. Host trials
 must inspect generated answers for these distinctions; passing code tests cannot
 establish semantic compliance or resistance to misleading prompts.
+
+## Output stopping evidence
+
+The local worker retains its 64-new-token limit and records `generation` metadata:
+`finish_reason` (`eos`, `length`, or `unknown`), `generated_tokens` (including special
+tokens), and `max_new_tokens`. EOS at the last allowed token takes precedence over
+length. Unknown means neither EOS nor exhausting the cap explains the stop.
+The parent requires this metadata from the subprocess. HTTP responses and
+`generation_result` receipts carry it; the independent verifier checks agreement.
+Legacy saved exchanges without these fields remain verifiable.
+
+The session prints a warning on length or unknown. `completed_unverified` means
+the exchange returned and was recorded; it does not mean the answer is complete.
+EOS is a model stop signal, not proof of semantic completeness or correctness.
+There is no automatic retry, continuation, grant renewal or output-limit increase.
+Short-answer guidance reduces verbosity but does not guarantee compliance.

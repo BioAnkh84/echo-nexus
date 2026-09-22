@@ -152,10 +152,12 @@ def run_generation(generator, *args, **kwargs):
     except BackendFailure as failure:
         record_event("generation_result", **failure.outcome.as_dict())
         raise
+    g.local_generation = getattr(reply, "generation", None) if USE_LOCAL else None
     outcome = ExecutionOutcome("returned_unverified", backend,
                                "response_received" if USE_OPENAI else "not_attempted")
     record_event("generation_result", **outcome.as_dict(),
-                 output_sha256=hashlib.sha256(reply.encode()).hexdigest())
+                 output_sha256=hashlib.sha256(reply.encode()).hexdigest(),
+                 **({"generation": g.local_generation} if g.local_generation is not None else {}))
     g.generation_outcome = outcome
     return reply
 
@@ -164,6 +166,8 @@ def complete_exchange(payload):
     previous = g.generation_outcome
     outcome = ExecutionOutcome("completed_unverified", previous.backend, previous.transmission)
     payload["execution"] = outcome.as_dict()
+    if getattr(g, "local_generation", None) is not None:
+        payload["generation"] = g.local_generation
     # This is preparation, not evidence of actual network delivery to a client.
     record_event("execution_result", **outcome.as_dict(), response_sha256=digest(payload),
                  delivery="unknown")
