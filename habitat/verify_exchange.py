@@ -48,7 +48,7 @@ def lines(raw):
     return raw.splitlines(keepends=True)
 
 
-def verify_exchange(ledger, memory, response, request_id, expected_tip):
+def verify_exchange(ledger, memory, response, request_id, expected_tip, orientation=None):
     """Inputs must be separately authorized, quiescent evidence snapshots.
 
     An expected tip is required but its provenance cannot be authenticated here.
@@ -95,6 +95,16 @@ def verify_exchange(ledger, memory, response, request_id, expected_tip):
                 and admission['gate_measurement'] == 'not_performed')
         if backend == 'openai':
             require(selected[2]['details']['destination'] == 'openai')
+        orientation_matched = False
+        if backend == 'local_model' and 'orientation_sha256' in selected[2]['details']:
+            details = selected[2]['details']
+            require(isinstance(orientation, bytes) and len(orientation) <= 32768)
+            require(hashlib.sha256(orientation).hexdigest() == details['orientation_sha256'])
+            package = parse(orientation)
+            require([n['id'] for n in package['notes']] == details['orientation_note_ids'])
+            orientation_matched = True
+        else:
+            require(orientation is None)
         generated = selected[len(prefix)]['details']
         completed = selected[-1]['details']
         transmission = 'response_received' if backend == 'openai' else 'not_attempted'
@@ -134,6 +144,7 @@ def verify_exchange(ledger, memory, response, request_id, expected_tip):
         return {'state': 'exchange_evidence_consistent', 'request_id': request_id,
                 'chain_tip': previous, 'expected_tip_matched': True,
                 'memory_entries_matched': 2, 'response_matched': True,
+                'orientation_snapshot_matched': orientation_matched,
                 'authority_verified': False, 'task_success_verified': False}
     except (KeyError, IndexError, TypeError, ValueError, UnicodeError, RecursionError):
         raise EvidenceError("Malformed or unsupported evidence") from None
@@ -156,10 +167,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('ledger', 'memory', 'response', 'request-id', 'expected-tip'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--orientation', help='Required snapshot when receipt uses historical orientation')
     args = parser.parse_args()
     try:
         result = verify_exchange(snapshot(args.ledger), snapshot(args.memory), snapshot(args.response),
-                                 args.request_id, args.expected_tip)
+                                 args.request_id, args.expected_tip,
+                                 orientation=snapshot(args.orientation) if args.orientation else None)
     except (EvidenceError, OSError):
         print(json.dumps({'state': 'not_verified', 'task_success_verified': False,
                           'error': 'Evidence unavailable, incomplete, inconsistent or unsupported'}))

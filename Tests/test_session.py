@@ -26,7 +26,7 @@ class SessionTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.args = types.SimpleNamespace(self_test=False, output_dir=self.root,
+        self.args = types.SimpleNamespace(orientation=None, orientation_sha256=None, self_test=False, output_dir=self.root,
             model=self.root / 'model', expected_commit='reviewed', grant_reference='synthetic operator authorization')
         self.previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
         self.addCleanup(lambda: [signal.signal(s, handler) for s, handler in self.previous.items()])
