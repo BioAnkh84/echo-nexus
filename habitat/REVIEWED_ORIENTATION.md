@@ -41,3 +41,16 @@ Validation: synthetic parser rejection, digest tampering, nonregular/symlink
 files, missing runtime permission, changed permission at launch, missing/altered
 verification snapshots, and real loopback lifecycle/cleanup. A real GPU recall
 trial is a separate outstanding observation, not implied by these tests.
+
+## Status-label guidance
+
+A host trial recalled the verification caution but described an old `verified`
+label as indicating past processing. The label alone supports no such inference.
+The worker prompt now explicitly separates recorded claims from processing,
+success, permission and current health, and says receipts do not renew authority.
+Ledger/journal-tail inspection alone is not proof of runtime health.
+
+This is model guidance, not a new enforcement mechanism. Existing grant checks
+remain the runtime permission boundary. Responses remain unverified. Host trials
+must inspect generated answers for these distinctions; passing code tests cannot
+establish semantic compliance or resistance to misleading prompts.
