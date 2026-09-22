@@ -19,7 +19,7 @@ MAX_REGISTRY_BYTES = 131072
 ACTIONS = frozenset({
     "cipher.import", "cipher.memory.read", "cipher.state.read", "cipher.log",
     "cipher.chat", "vexis.import", "vexis.memory.read", "vexis.chat",
-    "echo.handshake", "external.openai", "memory.export", "receipt.append", "local.generate", "local.context", "local.orientation",
+    "echo.handshake", "external.openai", "memory.export", "receipt.append", "local.generate", "local.context", "local.orientation", "local.session_facts",
 })
 
 

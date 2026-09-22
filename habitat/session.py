@@ -55,7 +55,10 @@ def parse_args():
     parser.add_argument('--expected-commit', help='Reviewed repository commit required for interactive sessions')
     parser.add_argument('--orientation', type=Path, help='Explicit reviewed historical package')
     parser.add_argument('--orientation-sha256', help='Operator-reviewed package digest')
+    parser.add_argument('--session-facts', action='store_true', help='Supply minimal server-derived current request facts to the local model')
     args = parser.parse_args()
+    if args.self_test and args.session_facts:
+        parser.error('Session facts require a local-model session')
     if bool(args.orientation) != bool(args.orientation_sha256) or (args.self_test and args.orientation):
         parser.error('Orientation requires both path and digest, and a local-model session')
     if not args.output_dir.is_absolute() or not args.output_dir.is_dir():
@@ -102,7 +105,7 @@ def main():
             'subject': 'local-operator', 'audience': 'echo-nexus', 'purpose': 'bounded-interactive-session',
             'data_root': str(root), 'token_sha256': hashlib.sha256(token.encode()).hexdigest(),
             'issued_at': started - 1, 'expires_at': expiry, 'revoked': False,
-            'actions': ['cipher.chat', 'receipt.append'] + ([] if args.self_test else ['local.generate', 'local.context']) + (['local.orientation'] if orientation else []),
+            'actions': ['cipher.chat', 'receipt.append'] + ([] if args.self_test else ['local.generate', 'local.context']) + (['local.orientation'] if orientation else []) + (['local.session_facts'] if args.session_facts else []),
             'import_files': []}
         def save_grant():
             replacement = registry.with_suffix('.new')
@@ -114,7 +117,9 @@ def main():
         os.environ.update(ECHO_NEXUS_ENABLE_DATA_ROUTES='1', ECHO_NEXUS_ROOT=str(root),
             ECHO_NEXUS_GRANTS_FILE=str(registry), ECHO_NEXUS_ENABLE_LOCAL_MODEL='0' if args.self_test else '1',
             ECHO_NEXUS_LOCAL_MODEL_PATH=str(args.model) if args.model else '',
-            ECHO_NEXUS_ORIENTATION_SHA256=args.orientation_sha256 or '')
+            ECHO_NEXUS_ORIENTATION_SHA256=args.orientation_sha256 or '',
+            ECHO_NEXUS_ENABLE_SESSION_FACTS='1' if args.session_facts else '0',
+            ECHO_NEXUS_SESSION_COMMIT=sha)
         spec = importlib.util.spec_from_file_location('session_server', REPO / 'habitat/cipher_server.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -234,6 +239,7 @@ def main():
         else:
             notes.append('No completed response available to verify.')
         report = {'commit': sha, 'checkout_dirty': dirty, 'self_test': args.self_test, 'backend': 'local_stub' if args.self_test else 'local_model',
+            'session_facts_enabled': args.session_facts,
             'server_stopped': True, 'grant_revoked': revoked, 'completed_responses': len(responses),
             'verifications': results, 'notes': notes, 'task_success_verified': False,
             'tip_provenance': 'Read from stopped-server snapshot; not an independent trusted anchor.'}

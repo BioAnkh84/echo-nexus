@@ -135,6 +135,20 @@ def verify_exchange(ledger, memory, response, request_id, expected_tip, orientat
         reference = payload.pop('receipt')
         require(reference == {'request_id': request_id, 'tip': selected[-1]['hash_self']})
         require(fingerprint(payload) == completed['response_sha256'])
+        facts_matched = False
+        attempted = selected[2]['details'] if backend == 'local_model' else {}
+        if 'session_facts_sha256' in attempted or 'session_facts' in payload:
+            facts = payload.get('session_facts')
+            require(backend == 'local_model' and isinstance(facts, dict))
+            require(fingerprint(facts) == attempted.get('session_facts_sha256'))
+            require(type(facts['schema_version']) is int and facts['schema_version'] == 1)
+            require(facts['request_id'] == request_id)
+            require(facts['source'] == 'local_server_configuration_at_request')
+            require(type(facts['observed_at_unix']) is int and facts['observed_at_unix'] > 0)
+            require(facts['context_entries_supplied'] == attempted['context_entries'])
+            require(facts['historical_orientation_notes_supplied'] == len(attempted.get('orientation_note_ids', [])))
+            require(facts['authority'] == 'not_conferred_by_this_snapshot')
+            facts_matched = True
         if 'generation' in generated or 'generation' in payload:
             meta = generated.get('generation')
             require(backend == 'local_model' and isinstance(meta, dict) and payload.get('generation') == meta)
@@ -153,6 +167,7 @@ def verify_exchange(ledger, memory, response, request_id, expected_tip, orientat
                 'chain_tip': previous, 'expected_tip_matched': True,
                 'memory_entries_matched': 2, 'response_matched': True,
                 'orientation_snapshot_matched': orientation_matched,
+                'session_facts_snapshot_matched': facts_matched,
                 'authority_verified': False, 'task_success_verified': False}
     except (KeyError, IndexError, TypeError, ValueError, UnicodeError, RecursionError):
         raise EvidenceError("Malformed or unsupported evidence") from None

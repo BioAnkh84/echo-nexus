@@ -1,3 +1,4 @@
+from session_facts import build as build_session_facts
 from orientation import validate as validate_orientation, OrientationError
 from flask import Flask, request, jsonify, g
 from pathlib import Path, PureWindowsPath
@@ -31,6 +32,10 @@ def data_root(value):
 
 USE_OPENAI = enabled("ECHO_NEXUS_ENABLE_OPENAI")
 USE_LOCAL = enabled("ECHO_NEXUS_ENABLE_LOCAL_MODEL")
+USE_SESSION_FACTS = enabled("ECHO_NEXUS_ENABLE_SESSION_FACTS")
+SESSION_COMMIT = os.environ.get("ECHO_NEXUS_SESSION_COMMIT")
+if USE_SESSION_FACTS and not USE_LOCAL:
+    raise ValueError("Session facts require the local backend")
 LOCAL_MODEL_PATH = data_root(os.environ.get("ECHO_NEXUS_LOCAL_MODEL_PATH"))
 if USE_LOCAL and (USE_OPENAI or LOCAL_MODEL_PATH is None):
     raise ValueError("Local backend needs an explicit model path and OpenAI disabled")
@@ -126,10 +131,19 @@ def run_generation(generator, *args, **kwargs):
     try:
         if USE_LOCAL:
             require_authority("local.generate")
+            if USE_SESSION_FACTS:
+                require_authority("local.session_facts")
             context = getattr(g, "local_context", [])
             orientation = getattr(g, "orientation_notes", [])
+            facts = None
+            if USE_SESSION_FACTS:
+                require_authority("local.session_facts")
+                facts = build_session_facts(g.exchange_id, len(context), len(orientation), SESSION_COMMIT)
+                g.session_facts = facts
             def check_local_launch():
                 require_authority("local.generate")
+                if facts is not None:
+                    require_authority("local.session_facts")
                 if orientation:
                     require_authority("local.orientation")
                 if context:
@@ -138,12 +152,14 @@ def run_generation(generator, *args, **kwargs):
                          input_sha256=hashlib.sha256(args[0].encode()).hexdigest(),
                          context_entries=len(context), context_sha256=digest(context),
                          **({"orientation_sha256": g.orientation_sha256, "orientation_note_ids": [n["id"] for n in orientation]} if orientation else {}),
+                         **({"session_facts_sha256": digest(facts)} if facts is not None else {}),
                          transmission="not_attempted")
             try:
                 reply = generate_local(LOCAL_MODEL_PATH, args[0],
                     "Cipher" if g.route_action == "cipher.chat" else "Vexis",
                     check_local_launch, **({"context": context} if context else {}),
-                    **({"orientation": orientation} if orientation else {}))
+                    **({"orientation": orientation} if orientation else {}),
+                    **({"session_facts": facts} if facts is not None else {}))
             except LocalFailure as error:
                 raise BackendFailure(ExecutionOutcome("failed", "local_model", "not_attempted",
                                                       error.reason)) from None
@@ -166,6 +182,8 @@ def complete_exchange(payload):
     previous = g.generation_outcome
     outcome = ExecutionOutcome("completed_unverified", previous.backend, previous.transmission)
     payload["execution"] = outcome.as_dict()
+    if getattr(g, "session_facts", None) is not None:
+        payload["session_facts"] = g.session_facts
     if getattr(g, "local_generation", None) is not None:
         payload["generation"] = g.local_generation
     # This is preparation, not evidence of actual network delivery to a client.
@@ -220,6 +238,8 @@ def protect_data_routes():
     if request.method == "POST" and not isinstance(request.get_json(silent=True), dict):
         return jsonify({"error": "JSON object required"}), 400
     body = request.get_json(silent=True)
+    if isinstance(body, dict) and "session_facts" in body:
+        return jsonify({"error": "Session facts are server-derived, not client-supplied"}), 400
     if isinstance(body, dict) and 'orientation' in body:
         if not USE_LOCAL or action not in {"cipher.chat", "vexis.chat"}:
             return jsonify({"error": "Orientation requires local chat"}), 400
@@ -246,6 +266,8 @@ def protect_data_routes():
         require_authority("receipt.append")
         if USE_LOCAL:
             require_authority("local.generate")
+            if USE_SESSION_FACTS:
+                require_authority("local.session_facts")
         if USE_OPENAI:
             require_authority("external.openai")
             if SEND_MEMORY:
