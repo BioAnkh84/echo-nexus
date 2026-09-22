@@ -77,3 +77,11 @@ The guidance now explicitly allows existing valid applicable grants and limits
 hash comparisons to consistency with compared bytes. These refinements still
 require host semantic observation; earlier trial results do not validate this
 new prompt revision.
+
+A further host answer generalized a valid grant to later tasks of the same type.
+The prompt now explicitly requires checking each proposed action against the
+actual grant's scope and conditions, rejects inference from task similarity, and
+treats missing grant terms as unknown applicability. This is advisory guidance;
+the runtime authorization checks remain the enforcement boundary. Independent
+single-question sessions are used for the next smoke trial to avoid carryover
+from earlier answers. Each session has its own explicit finite operator grant.
