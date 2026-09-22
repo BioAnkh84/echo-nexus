@@ -70,3 +70,10 @@ the exchange returned and was recorded; it does not mean the answer is complete.
 EOS is a model stop signal, not proof of semantic completeness or correctness.
 There is no automatic retry, continuation, grant renewal or output-limit increase.
 Short-answer guidance reduces verbosity but does not guarantee compliance.
+
+A subsequent two-question host trial produced EOS at 36 and 32 tokens and consistent
+saved evidence, but overstated mandatory reapproval and historical integrity.
+The guidance now explicitly allows existing valid applicable grants and limits
+hash comparisons to consistency with compared bytes. These refinements still
+require host semantic observation; earlier trial results do not validate this
+new prompt revision.
