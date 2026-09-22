@@ -38,3 +38,5 @@ the outer result separately reports the limited registry match.
 No original Habitat/VE code is imported, no log or memory is written, and no
 receipt is promoted to approval. Tests use synthetic local fixtures. No live
 integration or whole-Charter enforcement is claimed.
+
+Next design stage: [Measurement acquisition contract](MEASUREMENT_ACQUISITION_CONTRACT.md). Its unresolved policy requirements do not change this module's PAUSE/no-execution behavior.
