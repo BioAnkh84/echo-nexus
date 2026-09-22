@@ -135,6 +135,14 @@ def verify_exchange(ledger, memory, response, request_id, expected_tip, orientat
         reference = payload.pop('receipt')
         require(reference == {'request_id': request_id, 'tip': selected[-1]['hash_self']})
         require(fingerprint(payload) == completed['response_sha256'])
+        if 'generation' in generated or 'generation' in payload:
+            meta = generated.get('generation')
+            require(backend == 'local_model' and isinstance(meta, dict) and payload.get('generation') == meta)
+            require(set(meta) == {'finish_reason', 'generated_tokens', 'max_new_tokens'})
+            require(meta['finish_reason'] in {'eos', 'length', 'unknown'})
+            require(type(meta['generated_tokens']) is int and 1 <= meta['generated_tokens'] <= 64)
+            require(type(meta['max_new_tokens']) is int and meta['max_new_tokens'] == 64)
+            require(meta['finish_reason'] != 'length' or meta['generated_tokens'] == 64)
         reply = payload['reply_text' if action == 'echo.handshake' else 'reply']
         require(isinstance(reply, str) and hashlib.sha256(reply.encode()).hexdigest() == generated['output_sha256'])
         require(payload['execution'] == {key: generated[key] for key in

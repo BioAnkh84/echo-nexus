@@ -177,6 +177,10 @@ def main():
                         print('[Oldest context removed to stay within the session limit.]', flush=True)
                     print('Cipher>', body['reply'], flush=True)
                     print('[completed_unverified]', flush=True)
+                    if body.get('generation', {}).get('finish_reason') == 'length':
+                        print('[Output limit reached; this reply may be incomplete.]', flush=True)
+                    elif body.get('generation', {}).get('finish_reason') == 'unknown':
+                        print('[Generation stop reason unknown; completeness is unverified.]', flush=True)
                 except (OSError, ValueError):
                     failed = True
                     notes.append('Client I/O failed; effects may have occurred. No retry.')
